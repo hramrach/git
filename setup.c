@@ -270,12 +270,20 @@ int get_common_dir_noenv(struct strbuf *sb, const char *gitdir)
 {
 	struct strbuf data = STRBUF_INIT;
 	struct strbuf path = STRBUF_INIT;
-	int ret = 0;
+	int ret;
 
 	strbuf_addf(&path, "%s/commondir", gitdir);
-	if (file_exists(path.buf)) {
-		if (strbuf_read_file(&data, path.buf, 0) <= 0)
+	ret = strbuf_read_file(&data, path.buf, 0);
+	if (ret <= 0) {
+		/*
+		 * if file is missing or zero size (just being written)
+		 * assume default, bail otherwise
+		 */
+		if (ret && errno != ENOENT)
 			die_errno(_("failed to read %s"), path.buf);
+		strbuf_addstr(sb, gitdir);
+		ret = 0;
+	} else {
 		while (data.len && (data.buf[data.len - 1] == '\n' ||
 				    data.buf[data.len - 1] == '\r'))
 			data.len--;
@@ -286,8 +294,6 @@ int get_common_dir_noenv(struct strbuf *sb, const char *gitdir)
 		strbuf_addbuf(&path, &data);
 		strbuf_add_real_path(sb, path.buf);
 		ret = 1;
-	} else {
-		strbuf_addstr(sb, gitdir);
 	}
 
 	strbuf_release(&data);
