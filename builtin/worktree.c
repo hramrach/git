@@ -13,7 +13,6 @@
 #include "refs.h"
 #include "utf8.h"
 #include "worktree.h"
-#include "lockfile.h"
 
 static const char * const worktree_usage[] = {
 	N_("git worktree add [<options>] <path> [<commit-ish>]"),
@@ -140,17 +139,12 @@ static void prune_worktrees(void)
 	struct strbuf reason = STRBUF_INIT;
 	DIR *dir = opendir(git_path("worktrees"));
 	struct dirent *d;
-	struct strbuf sb_worktrees = STRBUF_INIT;
-	struct lock_file wt_lock = LOCK_INIT;
 	if (!dir)
 		return;
-	git_path_buf(&sb_worktrees, "worktrees");
 	while ((d = readdir(dir)) != NULL) {
 		if (is_dot_or_dotdot(d->d_name))
 			continue;
 		strbuf_reset(&reason);
-		hold_lock_file_for_update_timeout(&wt_lock, sb_worktrees.buf,
-						  LOCK_REPORT_ON_ERROR, -1);
 		if (!prune_worktree(d->d_name, &reason))
 			continue;
 		if (show_only || verbose)
@@ -158,9 +152,7 @@ static void prune_worktrees(void)
 		if (show_only)
 			continue;
 		delete_git_dir(d->d_name);
-		rollback_lock_file(&wt_lock);
 	}
-	strbuf_release(&sb_worktrees);
 	closedir(dir);
 	if (!show_only)
 		delete_worktrees_dir_if_empty();
@@ -274,8 +266,7 @@ static int add_worktree(const char *path, const char *refname,
 			const struct add_opts *opts)
 {
 	struct strbuf sb_git = STRBUF_INIT, sb_repo = STRBUF_INIT;
-	struct strbuf sb = STRBUF_INIT, sb_worktrees = STRBUF_INIT;
-	struct lock_file wt_lock = LOCK_INIT;
+	struct strbuf sb = STRBUF_INIT;
 	const char *name;
 	struct child_process cp = CHILD_PROCESS_INIT;
 	struct argv_array child_env = ARGV_ARRAY_INIT;
@@ -301,16 +292,9 @@ static int add_worktree(const char *path, const char *refname,
 	name = worktree_basename(path, &len);
 	git_path_buf(&sb_repo, "worktrees/%.*s", (int)(path + len - name), name);
 	len = sb_repo.len;
-
-	git_path_buf(&sb_worktrees, "worktrees");
-	hold_lock_file_for_update_timeout(&wt_lock, sb_worktrees.buf,
-					  LOCK_REPORT_ON_ERROR, -1);
-
-	if (safe_create_leading_directories_const(sb_repo.buf)) {
-		rollback_lock_file(&wt_lock);
+	if (safe_create_leading_directories_const(sb_repo.buf))
 		die_errno(_("could not create leading directories of '%s'"),
 			  sb_repo.buf);
-	}
 
 	while (mkdir(sb_repo.buf, 0777)) {
 		counter++;
@@ -400,7 +384,6 @@ static int add_worktree(const char *path, const char *refname,
 	FREE_AND_NULL(junk_git_dir);
 
 done:
-	rollback_lock_file(&wt_lock);
 	if (ret || !opts->keep_locked) {
 		strbuf_reset(&sb);
 		strbuf_addf(&sb, "%s/locked", sb_repo.buf);
@@ -434,7 +417,6 @@ done:
 	strbuf_release(&symref);
 	strbuf_release(&sb_repo);
 	strbuf_release(&sb_git);
-	strbuf_release(&sb_worktrees);
 	return ret;
 }
 
@@ -923,8 +905,6 @@ static int remove_worktree(int ac, const char **av, const char *prefix)
 	};
 	struct worktree **worktrees, *wt;
 	struct strbuf errmsg = STRBUF_INIT;
-	struct strbuf sb_worktrees = STRBUF_INIT;
-	struct lock_file wt_lock = LOCK_INIT;
 	const char *reason = NULL;
 	int ret = 0;
 
@@ -951,12 +931,9 @@ static int remove_worktree(int ac, const char **av, const char *prefix)
 		    errmsg.buf);
 	strbuf_release(&errmsg);
 
-	git_path_buf(&sb_worktrees, "worktrees");
 	if (file_exists(wt->path)) {
 		if (!force)
 			check_clean_worktree(wt, av[0]);
-		hold_lock_file_for_update_timeout(&wt_lock, sb_worktrees.buf,
-						  LOCK_REPORT_ON_ERROR, -1);
 
 		ret |= delete_git_work_tree(wt);
 	}
@@ -964,15 +941,10 @@ static int remove_worktree(int ac, const char **av, const char *prefix)
 	 * continue on even if ret is non-zero, there's no going back
 	 * from here.
 	 */
-	if (!is_lock_file_locked(&wt_lock))
-		hold_lock_file_for_update_timeout(&wt_lock, sb_worktrees.buf,
-						  LOCK_REPORT_ON_ERROR, -1);
 	ret |= delete_git_dir(wt->id);
-	rollback_lock_file(&wt_lock);
 	delete_worktrees_dir_if_empty();
 
 	free_worktrees(worktrees);
-	strbuf_release(&sb_worktrees);
 	return ret;
 }
 
